@@ -1,0 +1,589 @@
+import random
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+app = FastAPI(title="سیستم چندلیگی پینگ‌پنگ")
+
+tournaments: Dict[str, dict] = {}
+
+
+class CreateTournament(BaseModel):
+    title: str
+    players: List[str]
+    max_sets: int
+
+
+class MatchUpdate(BaseModel):
+    match_id: int
+    sets: List[Dict[str, int]]
+
+
+@app.get("/", response_class=HTMLResponse)
+def get_home():
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="fa" dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>سیستم مدیریت لیگ‌های پینگ‌پنگ</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+        <style>
+            body { font-family: 'Vazirmatn', sans-serif; }
+            select { background-image: none; }
+        </style>
+    </head>
+    <body class="bg-zinc-950 text-zinc-100 min-h-screen p-4 md:p-8 flex justify-center">
+        <div class="max-w-5xl w-full space-y-8">
+            
+            <header class="flex justify-between items-center border-b border-zinc-800 pb-4">
+                <div>
+                    <h1 class="text-2xl font-black text-white tracking-tight">🏓 مدیریت لیگ‌های پینگ‌پنگ</h1>
+                    <p class="text-xs text-zinc-500 mt-1">ساخت چندین لیگ، ذخیره‌سازی لیست لیگ‌ها و ثبت ست به ست</p>
+                </div>
+                <div id="header-actions"></div>
+            </header>
+
+            <div id="home-view" class="space-y-8">
+                <section class="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl space-y-6 shadow-xl">
+                    <h2 class="text-lg font-bold text-zinc-200">راه‌اندازی لیگ جدید</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-zinc-400 mb-1.5">عنوان لیگ / تورنمنت</label>
+                            <input id="t-name" type="text" placeholder="مثلاً: جام دوستانه" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-500 transition-all">
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-zinc-400 mb-1.5">تعداد بازیکنان</label>
+                                <input id="t-count" type="number" min="2" max="16" value="4" onchange="generatePlayerInputs()" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-500 transition-all">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-zinc-400 mb-1.5">تعداد ست‌های هر بازی</label>
+                                <select id="t-sets" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-500 transition-all cursor-pointer">
+                                    <option value="1">بهترین از ۱ ست</option>
+                                    <option value="2">بهترین از ۲ ست</option>
+                                    <option value="3" selected>بهترین از ۳ ست</option>
+                                    <option value="5">بهترین از ۵ ست</option>
+                                    <option value="7">بهترین از ۷ ست</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-zinc-400 mb-1.5">نام بازیکنان (با Enter یا Tab به فیلد بعدی بروید)</label>
+                            <div id="dynamic-inputs" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+                        </div>
+                        <button onclick="createTournament()" class="w-full bg-white text-zinc-950 font-bold py-3 rounded-xl text-sm hover:bg-zinc-200 transition-all cursor-pointer shadow-lg shadow-white/5">
+                            قرعه‌کشی و ثبت لیگ جدید 🚀
+                        </button>
+                    </div>
+                </section>
+
+                <section class="space-y-4">
+                    <h3 class="text-sm font-bold text-zinc-400 uppercase tracking-wider">لیست تمام لیگ‌های ذخیره‌شده</h3>
+                    <div id="tournaments-list" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                </section>
+            </div>
+
+            <div id="league-view" class="hidden space-y-8">
+                <div class="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-4 rounded-2xl">
+                    <div>
+                        <span class="text-xs text-zinc-500">لیگ در حال برگزاری:</span>
+                        <h2 id="active-league-title" class="text-xl font-bold text-white"></h2>
+                    </div>
+                    <button onclick="showHomeView()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs px-4 py-2 rounded-xl transition-all cursor-pointer">
+                        ← بازگشت به لیست لیگ‌ها
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div class="lg:col-span-2 space-y-4">
+                        <h3 class="text-sm font-bold text-zinc-400 uppercase tracking-wider">مسابقات این لیگ (بازی‌های انجام‌نشده در بالا)</h3>
+                        <div id="matches-list" class="space-y-3"></div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <h3 class="text-sm font-bold text-zinc-400 uppercase tracking-wider">جدول رده‌بندی دقیق</h3>
+                        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden p-2">
+                            <table class="w-full text-right text-xs">
+                                <thead>
+                                    <tr class="text-zinc-500 border-b border-zinc-800">
+                                        <th class="py-2.5 px-3">رتبه</th>
+                                        <th class="py-2.5 px-3">بازیکن</th>
+                                        <th class="py-2.5 px-3 text-center">برد</th>
+                                        <th class="py-2.5 px-3 text-center">تفاضل ست</th>
+                                        <th class="py-2.5 px-3 text-center">امتیاز</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="standings-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="match-view" class="hidden space-y-6">
+                <div class="flex items-center justify-between border-b border-zinc-800 pb-4">
+                    <button onclick="showLeagueView()" class="bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs font-semibold px-4 py-2 rounded-xl transition-all cursor-pointer">
+                        ← بازگشت به مسابقات لیگ
+                    </button>
+                    <h2 id="match-view-title" class="text-base font-bold text-white"></h2>
+                </div>
+
+                <div class="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-6 max-w-xl mx-auto shadow-xl">
+                    <div class="text-center space-y-1">
+                        <p class="text-xs text-zinc-500" id="match-subtitle"></p>
+                        <h3 class="text-sm font-semibold text-zinc-300">امتیازات ست‌ها را وارد کنید</h3>
+                    </div>
+
+                    <div id="view-sets-container" class="space-y-3 max-h-72 overflow-y-auto pl-1"></div>
+
+                    <button onclick="saveMatchResult()" class="w-full bg-white hover:bg-zinc-200 text-zinc-950 font-bold py-3 rounded-xl text-xs transition-all cursor-pointer">
+                        ذخیره نتیجه مسابقه
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <script>
+            let activeLeagueTitle = null;
+            let activeMatchId = null;
+            let activeLeagueData = null;
+            let currentMatchPlayers = { p1: '', p2: '' };
+
+            window.onload = function() {
+                generatePlayerInputs();
+                loadTournamentsList();
+            };
+
+            function generatePlayerInputs() {
+                const count = parseInt(document.getElementById('t-count').value) || 2;
+                const container = document.getElementById('dynamic-inputs');
+                container.innerHTML = '';
+                
+                for (let i = 0; i < count; i++) {
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = `نام بازیکن ${i + 1}`;
+                    input.className = 'player-input w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-zinc-500 transition-all';
+                    
+                    input.onkeydown = function(e) {
+                        if (e.key === 'Enter' || e.key === 'Tab') {
+                            e.preventDefault();
+                            const inputs = document.querySelectorAll('.player-input');
+                            const nextIndex = (i + 1) % inputs.length;
+                            inputs[nextIndex].focus();
+                        }
+                    };
+                    container.appendChild(input);
+                }
+            }
+
+            async function loadTournamentsList() {
+                const res = await fetch('/api/tournaments');
+                if (res.ok) {
+                    const titles = await res.json();
+                    renderTournamentsList(titles);
+                }
+            }
+
+            function renderTournamentsList(titles) {
+                const container = document.getElementById('tournaments-list');
+                container.innerHTML = '';
+
+                if (titles.length === 0) {
+                    container.innerHTML = `<div class="col-span-2 text-center py-8 text-zinc-600 text-xs">هنوز هیچ لیگی ثبت نشده است.</div>`;
+                    return;
+                }
+
+                titles.forEach(t => {
+                    const card = document.createElement('div');
+                    card.onclick = () => openLeague(t.title);
+                    card.className = 'bg-zinc-900 border border-zinc-800 hover:border-zinc-600 hover:bg-zinc-800/50 rounded-2xl p-5 flex justify-between items-center transition-all cursor-pointer group';
+                    card.innerHTML = `
+                        <div class="space-y-1">
+                            <h4 class="font-bold text-white text-sm group-hover:text-emerald-400 transition-colors">${t.title}</h4>
+                            <p class="text-xs text-zinc-500">${t.player_count} بازیکن | بهترین از ${t.max_sets} ست</p>
+                        </div>
+                        <span class="bg-white group-hover:bg-zinc-200 text-zinc-950 text-xs font-bold px-4 py-2 rounded-xl transition-all">
+                            ورود به لیگ 🏆
+                        </span>
+                    `;
+                    container.appendChild(card);
+                });
+            }
+
+            async function createTournament() {
+                const title = document.getElementById('t-name').value.trim();
+                const max_sets = parseInt(document.getElementById('t-sets').value);
+                const inputs = document.querySelectorAll('.player-input');
+                const players = Array.from(inputs).map(i => i.value.trim()).filter(p => p.length > 0);
+
+                if (!title) { alert('لطفاً عنوان لیگ را وارد کنید.'); return; }
+                if (players.length < 2) { alert('حداقل ۲ بازیکن با نام معتبر وارد کنید.'); return; }
+
+                const res = await fetch('/api/tournament', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ title, players, max_sets })
+                });
+
+                if (res.ok) {
+                    document.getElementById('t-name').value = '';
+                    loadTournamentsList();
+                    openLeague(title);
+                }
+            }
+
+            async function openLeague(title) {
+                activeLeagueTitle = title;
+                const res = await fetch(`/api/tournament/${encodeURIComponent(title)}`);
+                if (res.ok) {
+                    activeLeagueData = await res.json();
+                    showLeagueView();
+                }
+            }
+
+            function showHomeView() {
+                document.getElementById('league-view').classList.add('hidden');
+                document.getElementById('match-view').classList.add('hidden');
+                document.getElementById('home-view').classList.remove('hidden');
+                loadTournamentsList();
+            }
+
+            function showLeagueView() {
+                document.getElementById('home-view').classList.add('hidden');
+                document.getElementById('match-view').classList.add('hidden');
+                document.getElementById('league-view').classList.remove('hidden');
+
+                document.getElementById('active-league-title').innerText = activeLeagueData.title;
+
+                const standingsBody = document.getElementById('standings-body');
+                standingsBody.innerHTML = '';
+                activeLeagueData.standings.forEach((p, idx) => {
+                    let setDiffStr = p.set_diff > 0 ? `+${p.set_diff}` : p.set_diff;
+                    standingsBody.innerHTML += `
+                        <tr class="border-b border-zinc-800/50 hover:bg-zinc-800/20">
+                            <td class="py-2.5 px-3 font-mono text-zinc-400">${idx + 1}</td>
+                            <td class="py-2.5 px-3 font-semibold text-white">${p.name}</td>
+                            <td class="py-2.5 px-3 text-center text-zinc-300">${p.wins}</td>
+                            <td class="py-2.5 px-3 text-center text-zinc-300 font-mono">${setDiffStr}</td>
+                            <td class="py-2.5 px-3 text-center font-bold text-white">${p.points}</td>
+                        </tr>
+                    `;
+                });
+
+                const matchesList = document.getElementById('matches-list');
+                matchesList.innerHTML = '';
+
+                const sortedMatches = [...activeLeagueData.matches].sort((a, b) => (a.played === b.played ? 0 : a.played ? 1 : -1));
+
+                sortedMatches.forEach(m => {
+                    const card = document.createElement('div');
+                    card.className = `border rounded-2xl p-4 flex items-center justify-between transition-all ${m.played ? 'bg-zinc-950/40 border-zinc-800/80 opacity-75' : 'bg-zinc-900 border-zinc-600 shadow-lg'}`;
+                    
+                    let setsSummary = m.played ? m.sets.map(s => `${s.score1}-${s.score2}`).join(', ') : '⏳ در انتظار بازی';
+                    
+                    card.innerHTML = `
+                        <div class="space-y-1">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-bold ${m.played ? 'text-zinc-400' : 'text-white'}">${m.player1}</span>
+                                <span class="text-xs text-zinc-600">vs</span>
+                                <span class="text-xs font-bold ${m.played ? 'text-zinc-400' : 'text-white'}">${m.player2}</span>
+                                <span class="text-[10px] px-2 py-0.5 rounded-full ${m.played ? 'bg-zinc-800 text-zinc-400' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}">${m.played ? 'پایان یافته' : 'در جریان'}</span>
+                            </div>
+                            <p class="text-[11px] font-mono ${m.played ? 'text-zinc-600' : 'text-zinc-300'}">دور ${m.round} | ست‌ها: ${setsSummary}</p>
+                        </div>
+                        <button onclick="openMatchView(${m.id})" class="${m.played ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700' : 'bg-white text-zinc-950 hover:bg-zinc-200'} text-xs font-bold px-4 py-2 rounded-xl transition-all cursor-pointer">
+                            ${m.played ? 'مشاهده / ویرایش' : 'ثبت نتیجه 🎯'}
+                        </button>
+                    `;
+                    matchesList.appendChild(card);
+                });
+            }
+
+            function openMatchView(matchId) {
+                activeMatchId = matchId;
+                const match = activeLeagueData.matches.find(m => m.id === matchId);
+                const maxSets = activeLeagueData.max_sets;
+                currentMatchPlayers = { p1: match.player1, p2: match.player2 };
+
+                document.getElementById('match-view-title').innerText = `${match.player1} ⚔️ ${match.player2}`;
+                document.getElementById('match-subtitle').innerText = `مسابقه دور ${match.round} (بهترین از ${maxSets} ست)`;
+
+                const container = document.getElementById('view-sets-container');
+                container.innerHTML = '';
+
+                // ساخت گزینه‌های 0 تا 11 برای Dropdown
+                let optionsHtml = '';
+                for (let i = 0; i <= 11; i++) {
+                    // مقدار پیش‌فرض روی ۱۱ تنظیم می‌شود
+                    let selected = (i === 11) ? 'selected' : '';
+                    optionsHtml += `<option value="${i}" ${selected}>${i}</option>`;
+                }
+
+                for (let i = 0; i < maxSets; i++) {
+                    const existingSet = match.sets && match.sets[i] ? match.sets[i] : { score1: 11, score2: 11 };
+                    
+                    const row = document.createElement('div');
+                    row.className = 'bg-zinc-950 p-3 rounded-xl border border-zinc-800 set-row space-y-2';
+                    row.innerHTML = `
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-zinc-400">ست ${i + 1}</span>
+                            <label class="flex items-center gap-1.5 text-[11px] text-emerald-400 cursor-pointer">
+                                <input type="checkbox" onchange="toggleQuickWin(this, ${i})" class="quick-win-check rounded bg-zinc-900 border-zinc-700">
+                                برد سریع (۱۱ به ۹)
+                            </label>
+                        </div>
+                        <div class="score-inputs flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-2 flex-1 justify-end">
+                                <span class="text-xs text-zinc-300 truncate max-w-[80px]">${match.player1}</span>
+                                <select class="s1 bg-zinc-900 border border-zinc-800 text-center rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-zinc-500 font-bold">
+                                    ${optionsHtml}
+                                </select>
+                            </div>
+                            <span class="text-zinc-600 font-bold">:</span>
+                            <div class="flex items-center gap-2 flex-1">
+                                <select class="s2 bg-zinc-900 border border-zinc-800 text-center rounded-lg py-1.5 px-2 text-xs text-white focus:outline-none focus:border-zinc-500 font-bold">
+                                    ${optionsHtml}
+                                </select>
+                                <span class="text-xs text-zinc-300 truncate max-w-[80px]">${match.player2}</span>
+                            </div>
+                        </div>
+                    `;
+
+                    // ست کردن مقادیر قبلی اگر وجود داشتند
+                    if (existingSet.score1 !== undefined && existingSet.score2 !== undefined) {
+                        row.querySelector('.s1').value = existingSet.score1;
+                        row.querySelector('.s2').value = existingSet.score2;
+                    }
+
+                    container.appendChild(row);
+                }
+
+                document.getElementById('league-view').classList.add('hidden');
+                document.getElementById('match-view').classList.remove('hidden');
+            }
+
+            function toggleQuickWin(checkbox, setIndex) {
+                const row = checkbox.closest('.set-row');
+                const s1Select = row.querySelector('.s1');
+                const s2Select = row.querySelector('.s2');
+
+                if (checkbox.checked) {
+                    const winContainer = document.createElement('div');
+                    winContainer.className = 'winner-select-box flex items-center justify-center gap-2 py-1';
+                    winContainer.innerHTML = `
+                        <span class="text-xs text-zinc-400">برنده این ست:</span>
+                        <select onchange="applyQuickWin(this)" class="bg-zinc-900 border border-emerald-500/50 text-emerald-400 rounded-lg py-1 px-3 text-xs font-bold focus:outline-none">
+                            <option value="">انتخاب برنده...</option>
+                            <option value="p1">${currentMatchPlayers.p1} (۱۱ به ۹)</option>
+                            <option value="p2">${currentMatchPlayers.p2} (۱۱ به ۹)</option>
+                        </select>
+                    `;
+                    s1Select.parentElement.parentElement.style.display = 'none';
+                    row.appendChild(winContainer);
+                } else {
+                    const box = row.querySelector('.winner-select-box');
+                    if (box) box.remove();
+                    s1Select.parentElement.parentElement.style.display = 'flex';
+                    s1Select.value = '11';
+                    s2Select.value = '11';
+                }
+            }
+
+            function applyQuickWin(selectElem) {
+                const row = selectElem.closest('.set-row');
+                const s1Select = row.querySelector('.s1');
+                const s2Select = row.querySelector('.s2');
+
+                if (selectElem.value === 'p1') {
+                    s1Select.value = '11';
+                    s2Select.value = '9';
+                } else if (selectElem.value === 'p2') {
+                    s1Select.value = '9';
+                    s2Select.value = '11';
+                }
+            }
+
+            async function saveMatchResult() {
+                const rows = document.querySelectorAll('.set-row');
+                const sets = [];
+                rows.forEach(r => {
+                    const s1Val = r.querySelector('.s1').value;
+                    const s2Val = r.querySelector('.s2').value;
+                    if (s1Val !== '' && s2Val !== '') {
+                        sets.push({ score1: parseInt(s1Val), score2: parseInt(s2Val) });
+                    }
+                });
+
+                if (sets.length === 0) {
+                    alert('لطفاً امتیازات حداقل یک ست را انتخاب کنید.');
+                    return;
+                }
+
+                const res = await fetch(`/api/tournament/${encodeURIComponent(activeLeagueTitle)}/match`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ match_id: activeMatchId, sets })
+                });
+
+                if (res.ok) {
+                    activeLeagueData = await res.json();
+                    showLeagueView();
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/api/tournaments")
+def get_tournaments():
+    return [
+        {
+            "title": t["title"],
+            "player_count": len(t["players"]),
+            "max_sets": t["max_sets"],
+        }
+        for t in tournaments.values()
+    ]
+
+
+@app.post("/api/tournament")
+def create_tournament(data: CreateTournament):
+    if len(data.players) < 2:
+        raise HTTPException(status_code=400, detail="حداقل ۲ بازیکن نیاز است.")
+
+    players = list(data.players)
+    random.shuffle(players)
+
+    if len(players) % 2 != 0:
+        players.append(None)
+
+    n = len(players)
+    rounds = []
+
+    for r in range(n - 1):
+        round_matches = []
+        for i in range(n // 2):
+            p1 = players[i]
+            p2 = players[n - 1 - i]
+            if p1 is not None and p2 is not None:
+                round_matches.append((p1, p2))
+        rounds.append(round_matches)
+        players = [players[0]] + [players[-1]] + players[1:-1]
+
+    matches = []
+    match_id = 0
+    for r_idx, r_matches in enumerate(rounds):
+        for p1, p2 in r_matches:
+            matches.append(
+                {
+                    "id": match_id,
+                    "round": r_idx + 1,
+                    "player1": p1,
+                    "player2": p2,
+                    "sets": [],
+                    "played": False,
+                }
+            )
+            match_id += 1
+
+    tournaments[data.title] = {
+        "title": data.title,
+        "players": data.players,
+        "max_sets": data.max_sets,
+        "matches": matches,
+    }
+    return calculate_standings(data.title)
+
+
+@app.get("/api/tournament/{title}")
+def get_tournament(title: str):
+    if title not in tournaments:
+        raise HTTPException(status_code=404, detail="تورنمنت یافت نشد.")
+    return calculate_standings(title)
+
+
+@app.post("/api/tournament/{title}/match")
+def submit_match(title: str, payload: MatchUpdate):
+    if title not in tournaments:
+        raise HTTPException(status_code=404, detail="تورنمنت یافت نشد.")
+
+    t = tournaments[title]
+    for m in t["matches"]:
+        if m["id"] == payload.match_id:
+            m["sets"] = payload.sets
+            m["played"] = len(payload.sets) > 0
+            break
+
+    return calculate_standings(title)
+
+
+def calculate_standings(title: str):
+    t = tournaments[title]
+    stats = {
+        p: {
+            "name": p,
+            "played": 0,
+            "wins": 0,
+            "losses": 0,
+            "points": 0,
+            "set_diff": 0,
+            "point_diff": 0,
+        }
+        for p in t["players"]
+    }
+
+    for m in t["matches"]:
+        if m["played"] and m["sets"]:
+            p1, p2 = m["player1"], m["player2"]
+            p1_set_wins = 0
+            p2_set_wins = 0
+
+            for s in m["sets"]:
+                stats[p1]["point_diff"] += s["score1"] - s["score2"]
+                stats[p2]["point_diff"] += s["score2"] - s["score1"]
+                if s["score1"] > s["score2"]:
+                    p1_set_wins += 1
+                elif s["score2"] > s["score1"]:
+                    p2_set_wins += 1
+
+            stats[p1]["played"] += 1
+            stats[p2]["played"] += 1
+
+            stats[p1]["set_diff"] += p1_set_wins - p2_set_wins
+            stats[p2]["set_diff"] += p2_set_wins - p1_set_wins
+
+            if p1_set_wins > p2_set_wins:
+                stats[p1]["wins"] += 1
+                stats[p1]["points"] += 2
+                stats[p2]["losses"] += 1
+            elif p2_set_wins > p1_set_wins:
+                stats[p2]["wins"] += 1
+                stats[p2]["points"] += 2
+                stats[p1]["losses"] += 1
+
+    sorted_standings = sorted(
+        stats.values(),
+        key=lambda x: (x["points"], x["set_diff"], x["point_diff"], x["wins"]),
+        reverse=True,
+    )
+
+    return {
+        "title": t["title"],
+        "max_sets": t["max_sets"],
+        "standings": sorted_standings,
+        "matches": t["matches"],
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8000)

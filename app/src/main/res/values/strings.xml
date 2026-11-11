@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Ping Pong League</string>
+    <string name="app_title_fa">🏓 مدیریت لیگ‌های پینگ‌پنگ</string>
+    <string name="app_subtitle_fa">ساخت چندین لیگ، جدول رده‌بندی و ثبت ست‌ها</string>
+</resources>

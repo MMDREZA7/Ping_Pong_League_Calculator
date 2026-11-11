@@ -1,0 +1,6 @@
+{
+  "name": "Ping Pong League",
+  "description": "Multi-tournament and league management app for table tennis with round-robin schedules, set-by-set scoring, and live standings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
